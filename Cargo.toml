@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["safety-core"]
+# The firmware is a separate cross-compiled package (thumbv7em-none-eabihf) with its
+# own .cargo/config.toml, so it is excluded from the host workspace.
+exclude = ["firmware"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["Kamyar Mirzazadeh Moghadam"]
+rust-version = "1.85"
+repository = "https://github.com/kamyarmm/nrf52-safe-actuator"

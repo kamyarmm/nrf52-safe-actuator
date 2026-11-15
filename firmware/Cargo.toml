@@ -1,0 +1,39 @@
+[package]
+name = "safe-actuator-fw"
+version = "0.1.0"
+description = "Fault-tolerant actuator controller firmware for the nRF52840 (Embassy)."
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/kamyarmm/nrf52-safe-actuator"
+authors = ["Kamyar Mirzazadeh Moghadam"]
+publish = false
+
+[dependencies]
+safety-core = { path = "../safety-core", features = ["defmt"] }
+
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread", "defmt"] }
+embassy-nrf = { version = "0.11", features = ["nrf52840", "time-driver-rtc1", "gpiote", "defmt", "unstable-pac"] }
+embassy-time = { version = "0.5", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-sync = { version = "0.8", features = ["defmt"] }
+embassy-futures = "0.1"
+
+cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7"
+defmt = "1.0"
+defmt-rtt = "1.0"
+
+[profile.release]
+debug = 2
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+overflow-checks = true
+
+[profile.dev]
+opt-level = 1
+
+[features]
+default = ["fault-injection"]
+# Button-driven fault injection for demonstrations and bench testing.
+# Build with --no-default-features for a configuration without injection hooks.
+fault-injection = []
