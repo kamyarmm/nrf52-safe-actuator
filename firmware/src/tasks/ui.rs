@@ -2,14 +2,18 @@
 
 use core::sync::atomic::Ordering;
 
-use defmt::{info, warn};
+use defmt::info;
+#[cfg(feature = "fault-injection")]
+use defmt::warn;
 use embassy_futures::select::{select4, Either4};
 use embassy_nrf::gpio::{Input, Output};
 use embassy_time::{Duration, Ticker, Timer};
 use safety_core::SystemState;
 
 use crate::persist;
-use crate::shared::{self, inject, RECOVERY_REQUEST};
+#[cfg(feature = "fault-injection")]
+use crate::shared::inject;
+use crate::shared::{self, RECOVERY_REQUEST};
 
 pub struct Buttons {
     pub recover: Input<'static>,
@@ -44,18 +48,23 @@ pub async fn button_task(mut b: Buttons) {
                 RECOVERY_REQUEST.store(true, Ordering::Relaxed);
                 persist::dump();
             }
-            Either4::Second(_) if cfg!(feature = "fault-injection") => {
+            #[cfg(feature = "fault-injection")]
+            Either4::Second(_) => {
                 let on = inject::toggle(&inject::FREEZE_SENSOR);
                 warn!("[inject] freeze sensor: {}", on);
             }
-            Either4::Third(_) if cfg!(feature = "fault-injection") => {
+            #[cfg(feature = "fault-injection")]
+            Either4::Third(_) => {
                 inject::STALL_CONTROL.store(true, Ordering::Relaxed);
                 warn!("[inject] stall control task (expect watchdog reset)");
             }
-            Either4::Fourth(_) if cfg!(feature = "fault-injection") => {
+            #[cfg(feature = "fault-injection")]
+            Either4::Fourth(_) => {
                 let on = inject::toggle(&inject::OVERRUN);
                 warn!("[inject] deadline overrun: {}", on);
             }
+            // Without fault injection, buttons 2-4 do nothing.
+            #[cfg(not(feature = "fault-injection"))]
             _ => {}
         }
         Timer::after(Duration::from_millis(50)).await; // debounce
@@ -78,7 +87,8 @@ pub async fn led_task(mut leds: StatusLeds) {
             SystemState::SafeState => tick.is_multiple_of(2),
         };
         leds.state.set_level((!on).into());
-        leds.injection.set_level((!inject::any()).into());
+        leds.injection
+            .set_level((!shared::injection_active()).into());
         leds.deenergized.set_level(state.output_enabled().into());
     }
 }

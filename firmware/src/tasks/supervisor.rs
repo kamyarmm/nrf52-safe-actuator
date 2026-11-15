@@ -1,10 +1,12 @@
 //! Task supervision and the hardware watchdog.
 //!
 //! The watchdog is fed only while every supervised task is reporting heartbeats. On a
-//! missing heartbeat the supervisor removes actuator drive immediately (independent of
-//! the control task), records the fault, and stops feeding the watchdog so the MCU
-//! resets and boots into the latched safe state. If the executor itself is blocked,
-//! this task cannot run either and the watchdog fires on its own.
+//! missing heartbeat the supervisor de-energises the actuator itself, without relying
+//! on the control task, records the fault, and stops feeding the watchdog so the MCU
+//! resets and boots into the latched safe state. It shares the PWM driver and the
+//! executor with the control task, so it is not independent of a blocked executor:
+//! in that case this task cannot run either, the PWM keeps its last duty, and the
+//! hardware watchdog (up to 500 ms) is the backstop.
 
 use core::sync::atomic::Ordering;
 
@@ -14,7 +16,9 @@ use embassy_time::{Duration, Ticker};
 use safety_core::{FaultCode, HeartbeatMonitor};
 
 use crate::persist;
-use crate::shared::{self, ACTUATOR, OUTPUT_INHIBIT, SUPERVISED_TASKS, TASK_NAMES};
+use crate::shared::{
+    self, ACTUATOR, HEARTBEAT_FAULT, OUTPUT_INHIBIT, SUPERVISED_TASKS, TASK_NAMES,
+};
 
 const PERIOD: Duration = Duration::from_millis(20);
 /// Per-task heartbeat timeout: [sensor, control]. Several periods of margin each.
@@ -30,7 +34,10 @@ pub async fn supervisor_task(mut wdt: WatchdogHandle) {
         ticker.next().await;
         let now = shared::now_ms();
         for task in 0..SUPERVISED_TASKS {
-            hb.kick(task, shared::last_heartbeat_ms(task));
+            hb.kick(
+                task,
+                now.saturating_sub(shared::heartbeat_age_ms(task, now)),
+            );
         }
 
         match hb.check(now) {
@@ -43,6 +50,7 @@ pub async fn supervisor_task(mut wdt: WatchdogHandle) {
                     TASK_NAMES[task]
                 );
                 OUTPUT_INHIBIT.store(true, Ordering::SeqCst);
+                HEARTBEAT_FAULT.store(true, Ordering::SeqCst);
                 ACTUATOR.lock(|a| {
                     if let Some(a) = a.borrow_mut().as_mut() {
                         a.deenergize();

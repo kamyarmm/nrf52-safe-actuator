@@ -62,11 +62,16 @@ pub struct Config {
 
 impl Config {
     /// Defaults matching the reference hardware (100 Hz loop, RC-filtered PWM plant
-    /// behind a 2:1 divider, see the firmware README).
+    /// behind a 2:1 divider to VDD, SAADC input pull-up enabled; see the README).
+    ///
+    /// The divider alone maps position 0..1 to 0.5..1.0 of full scale. The SAADC
+    /// pull-up (~160 kΩ against the divider's 5 kΩ source impedance) pulls that
+    /// slightly toward VDD: `raw = K·(0.5 + pos/2) + (1 − K)` with `K = 160/165`,
+    /// i.e. `raw ≈ 0.5152 + 0.4848·pos`.
     pub const DEFAULT: Config = Config {
         cycle_dt_s: 0.01,
-        sensor_offset: 0.5,
-        sensor_gain: 2.0,
+        sensor_offset: 0.5152,
+        sensor_gain: 2.0625,
         raw_min: 0.45,
         raw_max: 0.95,
         max_sample_age_ms: 30,

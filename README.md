@@ -84,7 +84,7 @@ At 100 Hz, one cycle is 10 ms. Detection bounds are checked by the scenario test
 | Fault | Detected by | Detection bound | Reaction |
 |---|---|---|---|
 | Sensor open / short (`SensorOutOfRange`) | raw value outside 0.45–0.95 FS | 3 cycles (30 ms) | SafeState |
-| Sensor stuck / no data (`SensorStale`) | sample age > 30 ms | age + 2 cycles (≤ 60 ms) | SafeState |
+| Sensor data not updating (`SensorStale`) | sample age > 30 ms | age + 2 cycles (≤ 60 ms) | SafeState |
 | Actuator jammed / driver failed (`TrackingError`) | \|ref − pos\| > 0.1 | 30 cycles (300 ms) after threshold | SafeState |
 | CPU overload (`DeadlineOverrun`) | cycle execution > 5 ms | 3 cycles | Degraded (≤ 50 % output, slower slew) |
 | Task stalled (`HeartbeatLost`) | supervisor heartbeat check | ≤ 70 ms | output cut by supervisor, then watchdog reset |
@@ -93,19 +93,22 @@ At 100 Hz, one cycle is 10 ms. Detection bounds are checked by the scenario test
 
 ### Why the sensor signal never reaches 0 V or VDD
 
-The sensor is wired so that a healthy reading always sits between 0.5 and 0.9 of
-full scale. A broken wire pulls the input to VDD and a short pulls it to GND. Both
-are outside the valid band, so they're detected as faults instead of being read as
-valid positions. Industrial 0.5–4.5 V sensors use the same idea.
+The sensor is wired so that a healthy reading always sits between about 0.52 and
+0.90 of full scale. The ADC channel's internal pull-up is enabled, so a broken wire
+reads full scale instead of floating, and a short reads zero. Both are outside the
+valid band, so they're detected as faults instead of being read as valid positions.
+Industrial 0.5–4.5 V sensors use the same idea. The pull-up slightly loads the
+divider; that is accounted for in the sensor scaling in `Config::DEFAULT`.
 
 ### Why a hardware watchdog *and* heartbeats
 
 In a cooperative async executor, a task that awaits something that never happens
 doesn't crash. It just goes quiet. Each task therefore reports a heartbeat, and the
 supervisor only feeds the hardware watchdog while all heartbeats are fresh. When one
-is lost, the supervisor de-energises the actuator straight away through its own path
-to the driver, without waiting for the control task. If a task blocks the whole
-executor, the supervisor can't run either, and the watchdog resets the chip.
+is lost, the supervisor de-energises the actuator itself, without waiting for the
+control task, and stops feeding the watchdog. If a task blocks the whole executor,
+the supervisor can't run either: the PWM keeps its last duty until the watchdog
+resets the chip, up to 500 ms later.
 
 ### Fault log that survives resets
 
@@ -133,8 +136,8 @@ GND ─────────────┘
 ```
 
 The RC network stands in for an actuator: a first-order plant with τ = 50 ms whose
-"position" is the filtered PWM duty. The divider to VDD gives the offset band
-described above. Pull the P0.03 wire to simulate an open sensor, or short it to GND.
+"position" is the filtered PWM duty. The divider to VDD, together with the ADC
+input pull-up, gives the offset band described above. Pull the P0.03 wire to simulate an open sensor, or short it to GND.
 
 | DK resource | Function |
 |---|---|
@@ -195,15 +198,23 @@ cargo build --release --no-default-features  # build without fault-injection hoo
   `#![forbid(unsafe_code)]`.
 * **Make every detection time bounded.** Persistence filters filter out noise while
   keeping a known worst-case detection latency for each fault.
-* **Use independent shutdown paths.** The normal path is the control loop
-  commanding zero output. The supervisor path cuts the actuator directly. The last
-  resort is a watchdog reset, after which the pins return to their reset state.
+* **Layer the shutdown paths.** The normal path is the control loop commanding zero
+  output. The supervisor path cuts the actuator without relying on the control task.
+  The last resort is a watchdog reset, after which the pins return to their reset
+  state. The first two share the PWM driver and the executor; see the limitations.
 * **Require an operator to leave SafeState.** Automatic recovery is only allowed for
   degrading faults.
 
 ## Limitations and next steps
 
 This is a demonstrator, not a certified product. Natural next steps:
+
+* Make the supervisor's shutdown path independent of the executor: run it from a
+  higher-priority interrupt executor, or add a hardware enable line to the actuator
+  driver that a watchdog reset releases.
+* A sensor frozen at a constant value while still delivering fresh samples is only
+  caught indirectly, by the tracking monitor once the reference moves. A dedicated
+  frozen-signal check (e.g. on PWM ripple) would catch it directly.
 
 * Copy the fault log to flash (e.g. `sequential-storage`) so it also survives power
   loss.

@@ -33,6 +33,10 @@ pub static ACTUATOR: Mutex<CriticalSectionRawMutex, RefCell<Option<Actuator>>> =
 /// Set by the supervisor; once set, nothing may energise the actuator until reset.
 pub static OUTPUT_INHIBIT: AtomicBool = AtomicBool::new(false);
 
+/// Set by the supervisor when a heartbeat is lost, consumed by the control task so the
+/// safety manager latches `HeartbeatLost` if the control loop is still running.
+pub static HEARTBEAT_FAULT: AtomicBool = AtomicBool::new(false);
+
 /// Operator recovery request (button 1), consumed by the control task.
 pub static RECOVERY_REQUEST: AtomicBool = AtomicBool::new(false);
 
@@ -62,23 +66,42 @@ pub enum TaskId {
 pub const SUPERVISED_TASKS: usize = 2;
 pub const TASK_NAMES: [&str; SUPERVISED_TASKS] = ["sensor", "control"];
 
-/// Last heartbeat of each supervised task, in ms since boot.
+/// Last heartbeat of each supervised task: the low 32 bits of uptime in ms.
+///
+/// Cortex-M4 has no 64-bit atomics, so only 32 bits are stored. That wraps every
+/// ~49.7 days, so ages are computed with wrapping arithmetic on the same 32 bits
+/// rather than by comparing against the full 64-bit clock.
 static HEARTBEATS: [AtomicU32; SUPERVISED_TASKS] = [AtomicU32::new(0), AtomicU32::new(0)];
 
 pub fn heartbeat(task: TaskId) {
     HEARTBEATS[task as usize].store(now_ms() as u32, Ordering::Relaxed);
 }
 
-pub fn last_heartbeat_ms(task: usize) -> u64 {
-    HEARTBEATS[task].load(Ordering::Relaxed) as u64
+/// Time since `task` last reported, correct across the 32-bit wrap.
+pub fn heartbeat_age_ms(task: usize, now_ms: u64) -> u64 {
+    let last = HEARTBEATS[task].load(Ordering::Relaxed);
+    (now_ms as u32).wrapping_sub(last) as u64
 }
 
 pub fn now_ms() -> u64 {
     Instant::now().as_millis()
 }
 
-/// Fault-injection switches driven by the buttons. Compiled in only with the
+/// `true` while any fault injection is active (always `false` without the feature).
+pub fn injection_active() -> bool {
+    #[cfg(feature = "fault-injection")]
+    {
+        inject::any()
+    }
+    #[cfg(not(feature = "fault-injection"))]
+    {
+        false
+    }
+}
+
+/// Fault-injection switches driven by the buttons. Only compiled with the
 /// `fault-injection` feature (on by default for this demonstrator).
+#[cfg(feature = "fault-injection")]
 pub mod inject {
     use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -90,7 +113,7 @@ pub mod inject {
     pub static OVERRUN: AtomicBool = AtomicBool::new(false);
 
     pub fn get(flag: &AtomicBool) -> bool {
-        cfg!(feature = "fault-injection") && flag.load(Ordering::Relaxed)
+        flag.load(Ordering::Relaxed)
     }
 
     pub fn toggle(flag: &AtomicBool) -> bool {

@@ -3,12 +3,16 @@
 use core::sync::atomic::Ordering;
 
 use defmt::{info, warn};
-use embassy_time::{block_for, Duration, Instant, Ticker};
-use safety_core::{Config, CycleInput, SafetyManager, SystemState};
+#[cfg(feature = "fault-injection")]
+use embassy_time::block_for;
+use embassy_time::{Duration, Instant, Ticker};
+use safety_core::{Config, CycleInput, FaultCode, SafetyManager, SystemState};
 
 use crate::persist;
+#[cfg(feature = "fault-injection")]
+use crate::shared::inject;
 use crate::shared::{
-    self, inject, TaskId, ACTUATOR, LATEST_SAMPLE, OUTPUT_INHIBIT, RECOVERY_REQUEST,
+    self, TaskId, ACTUATOR, HEARTBEAT_FAULT, LATEST_SAMPLE, OUTPUT_INHIBIT, RECOVERY_REQUEST,
 };
 
 const PERIOD: Duration = Duration::from_millis(10);
@@ -46,12 +50,16 @@ pub async fn control_task(boot_state: SystemState) {
         ticker.next().await;
         let start = Instant::now();
 
+        #[cfg(feature = "fault-injection")]
         if inject::get(&inject::STALL_CONTROL) {
             warn!("[inject] control task stalled");
             // Never completes and never panics: invisible without supervision.
             core::future::pending::<()>().await;
         }
         shared::heartbeat(TaskId::Control);
+        if HEARTBEAT_FAULT.swap(false, Ordering::Relaxed) {
+            mgr.raise(FaultCode::HeartbeatLost);
+        }
 
         let now = start.as_millis();
         let sample = LATEST_SAMPLE.lock(|s| s.get());
@@ -98,6 +106,7 @@ pub async fn control_task(boot_state: SystemState) {
         }
         cycle = cycle.wrapping_add(1);
 
+        #[cfg(feature = "fault-injection")]
         if inject::get(&inject::OVERRUN) {
             block_for(Duration::from_millis(7));
         }

@@ -15,7 +15,7 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::pwm::SimplePwm;
-use embassy_nrf::saadc::{self, ChannelConfig, Gain, Reference, Saadc};
+use embassy_nrf::saadc::{self, ChannelConfig, Gain, Reference, Resistor, Saadc};
 use embassy_nrf::wdt::{self, HaltConfig, Watchdog, WatchdogHandle};
 use embassy_nrf::{bind_interrupts, peripherals};
 use safety_core::state::boot_state;
@@ -71,6 +71,10 @@ async fn main(spawner: Spawner) {
     let mut ch = ChannelConfig::single_ended(p.P0_03);
     ch.reference = Reference::VDD1_4;
     ch.gain = Gain::Gain1_4;
+    // Weak pull-up so a disconnected sensor wire reads full scale (out of the valid
+    // band) instead of floating to an arbitrary, possibly plausible value. Its small
+    // loading effect on the divider is part of the sensor scaling in `safety-core`.
+    ch.resistor = Resistor::Pullup;
     let adc = Saadc::new(p.SAADC, Irqs, saadc::Config::default(), [ch]);
 
     // ---- Buttons and LEDs (nRF52840-DK) -----------------------------------------------

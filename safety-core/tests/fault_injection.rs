@@ -1,8 +1,9 @@
 //! Closed-loop failure-injection scenarios.
 //!
 //! A simulated plant reproduces the reference hardware: the PWM command is low-pass
-//! filtered (first order, tau = 50 ms) and read back through a 2:1 divider to VDD, so
-//! the healthy raw signal spans 0.5..0.9 of ADC full scale. Each scenario injects one
+//! filtered (first order, tau = 50 ms) and read back through a 2:1 divider to VDD with
+//! the SAADC input pull-up enabled, so the healthy raw signal spans about 0.52..0.90 of
+//! ADC full scale and a disconnected sensor reads full scale. Each scenario injects one
 //! failure and checks the reaction *and* its detection-time bound.
 
 use safety_core::state::boot_state;
@@ -16,7 +17,7 @@ const TAU_S: f32 = 0.05;
 #[derive(Clone, Copy, PartialEq)]
 enum Injection {
     None,
-    /// Sensor wire disconnected: divider pulls the input to VDD.
+    /// Sensor wire disconnected: the SAADC pull-up takes the input to VDD.
     SensorOpen,
     /// Sensor task stops delivering samples.
     SensorFrozen,
@@ -67,7 +68,9 @@ impl Sim {
     fn step(&mut self) -> CycleOutput {
         self.now_ms += DT_MS;
 
-        let healthy_raw = 0.5 + self.plant / 2.0;
+        // 2:1 divider to VDD, loaded by the SAADC pull-up (K = 160k / 165k).
+        const K: f32 = 160.0 / 165.0;
+        let healthy_raw = K * (0.5 + self.plant / 2.0) + (1.0 - K);
         let raw = match self.injection {
             Injection::SensorOpen => Some(1.0),
             Injection::SensorGlitch => {

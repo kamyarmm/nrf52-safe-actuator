@@ -3,7 +3,9 @@
 use embassy_nrf::saadc::Saadc;
 use embassy_time::{Duration, Instant, Ticker};
 
-use crate::shared::{self, inject, Sample, TaskId, LATEST_SAMPLE};
+#[cfg(feature = "fault-injection")]
+use crate::shared::inject;
+use crate::shared::{self, Sample, TaskId, LATEST_SAMPLE};
 
 const PERIOD: Duration = Duration::from_millis(5);
 /// 12-bit single-ended full scale.
@@ -19,6 +21,7 @@ pub async fn sensor_task(mut adc: Saadc<'static, 1>) {
         adc.sample(&mut buf).await;
         shared::heartbeat(TaskId::Sensor);
 
+        #[cfg(feature = "fault-injection")]
         if inject::get(&inject::FREEZE_SENSOR) {
             // Task alive, data not updating: only the staleness monitor can see this.
             continue;
